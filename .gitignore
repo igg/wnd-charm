@@ -65,6 +65,8 @@ pychrm/swig/pychrm_wrap.cpp
 .dirstamp
 
 # Sigs calculated during tests
-tests/wndchrm_tests/images/binuc/*.sig
-tests/wndchrm_tests/images/norm/*.sig
+tests/wndchrm_tests/images/binuc-norm/binuc/*.sig
+tests/wndchrm_tests/images/binuc-norm/norm/*.sig
+tests/wndchrm_tests/images/test-tiffs/*-l.sig
+
 tests/wndchrm_tests/test-images-sigs-l.fit
