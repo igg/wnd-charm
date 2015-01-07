@@ -13,11 +13,11 @@ TestUtil::exit_fail("Please specify an executable\n") unless $ARGV[0];
 my $ex = $ARGV[0];
 my $path = TestUtil::getTestPath();
 
-print "removing sigs in $path/images...\n";
-find(\&do_entry, "$path/images");
+print "removing sigs in $path/images/binuc-norm...\n";
+find(\&do_entry, "$path/images/binuc-norm");
 
 print "calculating sigs...\n";
-`cd $path; $ex train -l images test-images-sigs-l.fit`;
+`cd $path; $ex train -l images/binuc-norm test-images-sigs-l.fit`;
 
 print "comparing to unbalanced.fit\n";
 my @res = `diff $path/test-images-sigs-l.fit $path/unbalanced.fit`;
