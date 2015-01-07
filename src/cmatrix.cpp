@@ -79,123 +79,145 @@ extern int verbosity;
 
 /* LoadTIFF
    filename -char *- full path to the image file
+   sample_index - int:
+     -1: default interpretation based on samples-per-pixel and photometric interpretation:
+         3 or 4 spp, photometric = RGB: RGB image.
+         any other samples-per-pixel, photometric is not RGB: Read only the first sample.
+         For RGB images, a greyscale image is also always calculated.
+         Since the RGB channels have to be read either way, if color information is not needed,
+         it can be disposed of later.
+     0+: the index of the sample to read (0 is first sample)
+     If the sample_index >= spp, return 0.
 */
-int ImageMatrix::LoadTIFF(char *filename) {
+int ImageMatrix::LoadTIFF(char *filename, int sample_index) {
 	unsigned int h,w,x=0,y=0;
-	unsigned short int spp=0,bps=0;
+	unsigned short int spp=0,bps=0, tiff_photo=1;
 	TIFF *tif = NULL;
-	unsigned char *buf8;
-	unsigned short *buf16;
+	unsigned char *buf8 = NULL;
+	unsigned short *buf16 = NULL;
 	RGBcolor rgb = {0,0,0};
 	ImageMatrix R_matrix, G_matrix, B_matrix;
 	Moments2 R_stats, G_stats, B_stats;
 
 	TIFFSetWarningHandler(NULL);
-	if( (tif = TIFFOpen(filename, "r")) ) {
-		source = filename;
+	
+	if( ! (tif = TIFFOpen(filename, "r")) ) return(0);
 
-		TIFFGetField(tif, TIFFTAG_IMAGEWIDTH, &w);
-		width = w;
-		TIFFGetField(tif, TIFFTAG_IMAGELENGTH, &h);
-		height = h;
-		TIFFGetField(tif, TIFFTAG_BITSPERSAMPLE, &bps);
-		bits=bps;
-		if ( ! (bits == 8 || bits == 16) ) return (0); // only 8 and 16-bit images supported.
-		TIFFGetField(tif, TIFFTAG_SAMPLESPERPIXEL, &spp);
-		if (!spp) spp=1;  /* assume one sample per pixel if nothing is specified */
-		// regardless of how the image comes in, the stored mode is HSV
-		if (spp == 3) {
-			ColorMode = cmHSV;
-			// If the bits are > 8, we do the read into doubles so that later
-			// we can scale the image to its actual signal range.
-			if (bits > 8) {
-				R_matrix.ColorMode = cmGRAY;
-				R_matrix.allocate (width, height);
-				G_matrix.ColorMode = cmGRAY;
-				G_matrix.allocate (width, height);
-				B_matrix.ColorMode = cmGRAY;
-				B_matrix.allocate (width, height);
-			}
-		} else {
-			ColorMode = cmGRAY;
+	source = filename;
+
+	TIFFGetField(tif, TIFFTAG_IMAGEWIDTH, &w);
+	width = w;
+	TIFFGetField(tif, TIFFTAG_IMAGELENGTH, &h);
+	height = h;
+	TIFFGetField(tif, TIFFTAG_BITSPERSAMPLE, &bps);
+	bits=bps;
+	if ( ! (bits == 8 || bits == 16) ) return (0); // only 8 and 16-bit images supported.
+	TIFFGetField(tif, TIFFTAG_SAMPLESPERPIXEL, &spp);
+	TIFFGetField(tif, TIFFTAG_PHOTOMETRIC, &tiff_photo);
+	
+	if (!spp) spp=1;  /* assume one sample per pixel if nothing is specified */
+	// The tiff can be interpreted as RGB by default if there are 3 or 4 samples per pixel,
+	// with an optional ignored alpha channel, and photometric interpretation set to RGB
+	// spot-check of 8 & 16 bit per channel RGB images used @ IICBU confirmed to have
+	// RGB photometric interpretation set.
+	// For RGB interpretation, the sample_index parameter must be less than 0
+	// RGB images are stored in HSV mode, since that is most convenient for color features.
+	if ( (spp == 3 || spp == 4) && tiff_photo == PHOTOMETRIC_RGB && sample_index < 0 ) {
+		ColorMode = cmHSV;
+		// If the bits are > 8, we do the read into doubles so that later
+		// we can scale the image to its actual signal range.
+		if (bits > 8) {
+			R_matrix.ColorMode = cmGRAY;
+			R_matrix.allocate (width, height);
+			G_matrix.ColorMode = cmGRAY;
+			G_matrix.allocate (width, height);
+			B_matrix.ColorMode = cmGRAY;
+			B_matrix.allocate (width, height);
 		}
-		if ( TIFFNumberOfDirectories(tif) > 1) return(0);   /* get the number of slices (Zs) */
+	} else if ( (sample_index > -1 && sample_index < spp) || (sample_index < 0) ){
+	// Either specified and existing single image plane, or default sample_index (0)
+	// The sample_index is now an actual sample index (not < 0)
+		ColorMode = cmGRAY;
+		if (sample_index < 0) sample_index = 0;
+	} else {
+		// Error if sample_index > -1, and is >= spp
+		return (0);
+	}
+	// Directories > 1 are not supported (usually sub-sampled images)
+	if ( TIFFNumberOfDirectories(tif) > 1) return(0);
 
-		/* allocate the data */
-		allocate (width, height);
-		writeablePixels pix_plane = WriteablePixels();
-		writeableColors clr_plane = WriteableColors();
+	/* allocate the data */
+	allocate (width, height);
+	writeablePixels pix_plane = WriteablePixels();
+	writeableColors clr_plane = WriteableColors();
 
-		/* read TIFF header and determine image size */
-		buf8 = (unsigned char *)_TIFFmalloc(TIFFScanlineSize(tif)*spp);
+	/* read TIFF header and determine image size */
+	if (bits > 8)
 		buf16 = (unsigned short *)_TIFFmalloc( (tsize_t)sizeof(unsigned short)*TIFFScanlineSize(tif)*spp );
+	else
+		buf8 = (unsigned char *)_TIFFmalloc(TIFFScanlineSize(tif)*spp);
+	for (y = 0; y < height; y++) {
+		int col;
+		if (bits==8) TIFFReadScanline(tif, buf8, y);
+		else TIFFReadScanline(tif, buf16, y);
+		x=0;col=0;
+		while (x<width) {
+			unsigned char byte_data;
+			unsigned short short_data;
+			double val=0;
+			if (ColorMode == cmHSV) { // Deal with RGB images
+				if (bits > 8) { // HDR RGB
+					R_matrix.WriteablePixels()(y,x) = R_stats.add ((double) buf16[col+0]);
+					G_matrix.WriteablePixels()(y,x) = G_stats.add ((double) buf16[col+1]);
+					B_matrix.WriteablePixels()(y,x) = B_stats.add ((double) buf16[col+2]);
+					// We need the input signal range to convert HDR RGB to greyscale, so do it on second pass
+				} else { // 8-bit RGB
+					rgb.r = (unsigned char)(R_stats.add ((double) buf8[col+0]));
+					rgb.g = (unsigned char)(G_stats.add ((double) buf8[col+1]));
+					rgb.b = (unsigned char)(B_stats.add ((double) buf8[col+2]));
+					pix_plane (y, x) = stats.add (RGB2GRAY (rgb));
+					clr_plane (y, x) = RGB2HSV(rgb);
+				}
+			} else { // Deal with non-color images
+				if (bits > 8)
+					pix_plane (y, x) = stats.add (buf16[col+sample_index]);
+				else
+					pix_plane (y, x) = stats.add (buf8[col+sample_index]);
+			}
+			x++;
+			col+=spp;
+		}
+	}
+	// For HDR RGB, do the conversion to unsigned chars based on the input signal range
+	// i.e. scale global RGB min-max to 0-255
+	if (ColorMode == cmHSV && bits > 8) {
+		size_t a, num = width*height;
+		double RGB_min=0, RGB_max=0, RGB_scale=0;
+		R_matrix.finish();
+		G_matrix.finish();
+		B_matrix.finish();
+		// Get the min and max for all 3 channels
+		if (R_stats.min() <= G_stats.min() && R_stats.min() <= B_stats.min()) RGB_min = R_stats.min();
+		else if (G_stats.min() <= R_stats.min() && G_stats.min() <= B_stats.min()) RGB_min = G_stats.min();
+		else if (B_stats.min() <= R_stats.min() && B_stats.min() <= G_stats.min()) RGB_min = B_stats.min();
+		if (R_stats.max() >= G_stats.max() && R_stats.max() >= B_stats.max()) RGB_max = R_stats.max();
+		else if (G_stats.max() >= R_stats.max() && G_stats.max() >= B_stats.max()) RGB_max = G_stats.max();
+		else if (B_stats.max() >= R_stats.max() && B_stats.max() >= G_stats.max()) RGB_max = B_stats.max();
+		// Scale the clrData to the global min / max.
+		RGB_scale = (255.0/(RGB_max-RGB_min));
 		for (y = 0; y < height; y++) {
-			int col;
-			if (bits==8) TIFFReadScanline(tif, buf8, y);
-			else TIFFReadScanline(tif, buf16, y);
-			x=0;col=0;
-			while (x<width) {
-				unsigned char byte_data;
-				unsigned short short_data;
-				double val=0;
-				int sample_index;
-				for (sample_index=0;sample_index<spp;sample_index++) {
-					byte_data=buf8[col+sample_index];
-					short_data=buf16[col+sample_index];
-					if (bits==8) val=(double)byte_data;
-					else val=(double)(short_data);
-					if (spp==3 && bits > 8) {  /* RGB image */
-						if (sample_index==0) R_matrix.WriteablePixels()(y,x) = R_stats.add (val);
-						if (sample_index==1) G_matrix.WriteablePixels()(y,x) = G_stats.add (val);
-						if (sample_index==2) B_matrix.WriteablePixels()(y,x) = B_stats.add (val);
-					} else if (spp == 3) {
-						if (sample_index==0) rgb.r = (unsigned char)(R_stats.add (val));
-						if (sample_index==1) rgb.g = (unsigned char)(G_stats.add (val));
-						if (sample_index==2) rgb.b = (unsigned char)(B_stats.add (val));
-					}
-				}
-				if (spp == 3 && bits == 8) {
-					pix_plane (y, x) = stats.add (RGB2GRAY (rgb));
-					clr_plane (y, x) = RGB2HSV(rgb);
-				} else if (spp == 1) {
-					pix_plane (y, x) = stats.add (val);
-				}
-				x++;
-				col+=spp;
+			for (x = 0; x < width; x++) {
+				rgb.r = (unsigned char)( (R_matrix.ReadablePixels()(y,x) - RGB_min) * RGB_scale);
+				rgb.g = (unsigned char)( (G_matrix.ReadablePixels()(y,x) - RGB_min) * RGB_scale);
+				rgb.b = (unsigned char)( (B_matrix.ReadablePixels()(y,x) - RGB_min) * RGB_scale);
+				pix_plane (y, x) = stats.add (RGB2GRAY (rgb));
+				clr_plane (y, x) = RGB2HSV(rgb);
 			}
 		}
-		// Do the conversion to unsigned chars based on the input signal range
-		// i.e. scale global RGB min-max to 0-255
-		if (spp == 3 && bits > 8) {
-			size_t a, num = width*height;
-			double RGB_min=0, RGB_max=0, RGB_scale=0;
-			R_matrix.finish();
-			G_matrix.finish();
-			B_matrix.finish();
-			// Get the min and max for all 3 channels
-			if (R_stats.min() <= G_stats.min() && R_stats.min() <= B_stats.min()) RGB_min = R_stats.min();
-			else if (G_stats.min() <= R_stats.min() && G_stats.min() <= B_stats.min()) RGB_min = G_stats.min();
-			else if (B_stats.min() <= R_stats.min() && B_stats.min() <= G_stats.min()) RGB_min = B_stats.min();
-			if (R_stats.max() >= G_stats.max() && R_stats.max() >= B_stats.max()) RGB_max = R_stats.max();
-			else if (G_stats.max() >= R_stats.max() && G_stats.max() >= B_stats.max()) RGB_max = G_stats.max();
-			else if (B_stats.max() >= R_stats.max() && B_stats.max() >= G_stats.max()) RGB_max = B_stats.max();
-			// Scale the clrData to the global min / max.
-			RGB_scale = (255.0/(RGB_max-RGB_min));
-			for (y = 0; y < height; y++) {
-				for (x = 0; x < width; x++) {
-					rgb.r = (unsigned char)( (R_matrix.ReadablePixels()(y,x) - RGB_min) * RGB_scale);
-					rgb.g = (unsigned char)( (G_matrix.ReadablePixels()(y,x) - RGB_min) * RGB_scale);
-					rgb.b = (unsigned char)( (B_matrix.ReadablePixels()(y,x) - RGB_min) * RGB_scale);
-					pix_plane (y, x) = stats.add (RGB2GRAY (rgb));
-					clr_plane (y, x) = RGB2HSV(rgb);
-				}
-			}
-		}
-		_TIFFfree(buf8);
-		_TIFFfree(buf16);
-		TIFFClose(tif);
-
-	} else return(0);
+	}
+	_TIFFfree(buf8);
+	_TIFFfree(buf16);
+	TIFFClose(tif);
 
 	return(1);
 }

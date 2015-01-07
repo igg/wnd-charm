@@ -211,7 +211,7 @@ public:
 	void WriteableColorsFinish () {
 		_is_clr_writeable = false;
 	}
-	int LoadTIFF(char *filename);                   // load from TIFF file
+	int LoadTIFF(char *filename, int sample_index = -1);                   // load from TIFF file
 	int SaveTiff(char *filename);                   // save a matrix in TIF format
 	virtual int OpenImage(char *image_file_name,            // load an image of any supported format
 		int downsample, rect *bounding_rect,
