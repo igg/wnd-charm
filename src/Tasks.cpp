@@ -33,6 +33,7 @@
 #include "ImageTransforms.h"
 #include "FeatureAlgorithms.h"
 #include "cmatrix.h"
+#include "wndchrm_error.h"
 
 
 // This file contains base classes for computation tasks, plans and executors.
@@ -72,7 +73,7 @@ std::vector<const ComputationTask *> &ComputationTaskInstances::getInstances () 
 bool ComputationTaskInstances::add (const ComputationTask *task) {
 	static std::vector<const ComputationTask *> &instances = getInstances();
 
-	if (verbosity > 4) std::cout << "Registering " << task->typeLabel () << " '" << task->name << "'" << std::endl;
+	if (getEnvVerbosity() > 4) std::cout << "Registering " << task->typeLabel () << " '" << task->name << "'" << std::endl;
 	instances.push_back (task);
 	// register_task() in FeatureCalculationPlan tasks register themselves with FeatureNames
 	return (task->register_task());

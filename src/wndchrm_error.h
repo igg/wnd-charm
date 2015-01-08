@@ -15,6 +15,7 @@ enum WNDCHRM_ERROR {
 };
 
 extern int verbosity;
+int getEnvVerbosity ();
 void catErrno ();
 void catError (const char *fmt, ...);
 void catError (const std::string &error);
