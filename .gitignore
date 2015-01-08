@@ -68,5 +68,6 @@ pychrm/swig/pychrm_wrap.cpp
 tests/wndchrm_tests/images/binuc-norm/binuc/*.sig
 tests/wndchrm_tests/images/binuc-norm/norm/*.sig
 tests/wndchrm_tests/images/test-tiffs/*-l.sig
+foo.fit
 
 tests/wndchrm_tests/test-images-sigs-l.fit
