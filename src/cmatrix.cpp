@@ -667,6 +667,14 @@ void ImageMatrix::Downsample (const ImageMatrix &matrix_IN, double x_ratio, doub
 			new_y++;
 		}
 	}
+	if (verbosity > 8 && source.length() && source.find(".tif")) {
+		string dumpfile = source;
+		char dstr[32];
+		snprintf (dstr,32,"-d%dx%d.tif",(int)((x_ratio*100)+0.5),(int)((y_ratio*100)+0.5));
+		dumpfile.replace(dumpfile.find(".tif"), 4, dstr);
+		fprintf (stdout, "dumping downsampled tiff %s\n", dumpfile.c_str());
+		SaveTiff((char *)dumpfile.c_str());
+	}
 }
 
 

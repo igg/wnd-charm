@@ -27,6 +27,7 @@ std::ostringstream error_messages;
 //      > 5 - report execution task execution
 //      > 6 - report execution tasks added/removed from queue
 //      > 7 - report memory allocation/deallocation for matrixes
+//      > 8 - dump intermediate images
 int verbosity = getEnvVerbosity ();
 int getEnvVerbosity () {
 	return (getenv("WNDCHRM_VERBOSITY") ? atoi (getenv("WNDCHRM_VERBOSITY")) : 2);
