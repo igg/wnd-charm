@@ -27,6 +27,8 @@
 /* Written by:  Lior Shamir <shamirl [at] mail [dot] nih [dot] gov>              */
 /*~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~*/
 
+#define DEBUG 0
+
 #include <vector>
 #include <math.h>
 #include <stdio.h>
@@ -187,31 +189,31 @@ int ImageMatrix::LoadTIFF(char *filename, int sample_index) {
 			x++;
 			col+=spp;
 		}
-	}
-	// For HDR RGB, do the conversion to unsigned chars based on the input signal range
-	// i.e. scale global RGB min-max to 0-255
-	if (ColorMode == cmHSV && bits > 8) {
-		size_t a, num = width*height;
-		double RGB_min=0, RGB_max=0, RGB_scale=0;
-		R_matrix.finish();
-		G_matrix.finish();
-		B_matrix.finish();
-		// Get the min and max for all 3 channels
-		if (R_stats.min() <= G_stats.min() && R_stats.min() <= B_stats.min()) RGB_min = R_stats.min();
-		else if (G_stats.min() <= R_stats.min() && G_stats.min() <= B_stats.min()) RGB_min = G_stats.min();
-		else if (B_stats.min() <= R_stats.min() && B_stats.min() <= G_stats.min()) RGB_min = B_stats.min();
-		if (R_stats.max() >= G_stats.max() && R_stats.max() >= B_stats.max()) RGB_max = R_stats.max();
-		else if (G_stats.max() >= R_stats.max() && G_stats.max() >= B_stats.max()) RGB_max = G_stats.max();
-		else if (B_stats.max() >= R_stats.max() && B_stats.max() >= G_stats.max()) RGB_max = B_stats.max();
-		// Scale the clrData to the global min / max.
-		RGB_scale = (255.0/(RGB_max-RGB_min));
-		for (y = 0; y < height; y++) {
-			for (x = 0; x < width; x++) {
-				rgb.r = (unsigned char)( (R_matrix.ReadablePixels()(y,x) - RGB_min) * RGB_scale);
-				rgb.g = (unsigned char)( (G_matrix.ReadablePixels()(y,x) - RGB_min) * RGB_scale);
-				rgb.b = (unsigned char)( (B_matrix.ReadablePixels()(y,x) - RGB_min) * RGB_scale);
-				pix_plane (y, x) = stats.add (RGB2GRAY (rgb));
-				clr_plane (y, x) = RGB2HSV(rgb);
+		// Do the conversion to unsigned chars based on the input signal range
+		// i.e. scale global RGB min-max to 0-255
+		if (spp == 3 && bits > 8) {
+			//size_t a, num = width*height;
+			double RGB_min=0, RGB_max=0, RGB_scale=0;
+			R_matrix.finish();
+			G_matrix.finish();
+			B_matrix.finish();
+			// Get the min and max for all 3 channels
+			if (R_stats.min() <= G_stats.min() && R_stats.min() <= B_stats.min()) RGB_min = R_stats.min();
+			else if (G_stats.min() <= R_stats.min() && G_stats.min() <= B_stats.min()) RGB_min = G_stats.min();
+			else if (B_stats.min() <= R_stats.min() && B_stats.min() <= G_stats.min()) RGB_min = B_stats.min();
+			if (R_stats.max() >= G_stats.max() && R_stats.max() >= B_stats.max()) RGB_max = R_stats.max();
+			else if (G_stats.max() >= R_stats.max() && G_stats.max() >= B_stats.max()) RGB_max = G_stats.max();
+			else if (B_stats.max() >= R_stats.max() && B_stats.max() >= G_stats.max()) RGB_max = B_stats.max();
+			// Scale the clrData to the global min / max.
+			RGB_scale = (255.0/(RGB_max-RGB_min));
+			for (y = 0; y < height; y++) {
+				for (x = 0; x < width; x++) {
+					rgb.r = (unsigned char)( (R_matrix.ReadablePixels()(y,x) - RGB_min) * RGB_scale);
+					rgb.g = (unsigned char)( (G_matrix.ReadablePixels()(y,x) - RGB_min) * RGB_scale);
+					rgb.b = (unsigned char)( (B_matrix.ReadablePixels()(y,x) - RGB_min) * RGB_scale);
+					pix_plane (y, x) = stats.add (RGB2GRAY (rgb));
+					clr_plane (y, x) = RGB2HSV(rgb);
+				}
 			}
 		}
 	}
@@ -271,18 +273,26 @@ int ImageMatrix::SaveTiff(char *filename) {
 
 int ImageMatrix::OpenImage(char *image_file_name, int downsample, rect *bounding_rect, double mean, double stddev) {  
 	int res=0;
-	if (strstr(image_file_name,".tif") || strstr(image_file_name,".TIF")) {  
+
+	if( !strstr(image_file_name,".tif") && ! strstr(image_file_name,".TIF") )
+	  return 0;
+
+	if (bounding_rect && bounding_rect->x >= 0) {
+		// submatrix allocates memory on top of *this, so *this can't both be the source
+		// and destination of the crop, use a buffer:
+		ImageMatrix copy_matrix;
+		res = copy_matrix.LoadTIFF(image_file_name);
+		submatrix( copy_matrix, (unsigned int)bounding_rect->x, (unsigned int)bounding_rect->y,
+			(unsigned int)bounding_rect->x+bounding_rect->w-1, (unsigned int)bounding_rect->y+bounding_rect->h-1
+			);
+	}
+	else {
 		res=LoadTIFF(image_file_name);
 	}
 
 	// add the image only if it was loaded properly
 	if (res) {
 		// compute features only from an area of the image
-		if (bounding_rect && bounding_rect->x >= 0) {
-			submatrix (*this, (unsigned int)bounding_rect->x, (unsigned int)bounding_rect->y,
-				(unsigned int)bounding_rect->x+bounding_rect->w-1, (unsigned int)bounding_rect->y+bounding_rect->h-1
-			);
-		}
 		if (downsample>0 && downsample<100)  /* downsample by a given factor */
 			Downsample(*this, ((double)downsample)/100.0,((double)downsample)/100.0);   /* downsample the image */
 		if (mean>0)  /* normalize to a given mean and standard deviation */
@@ -350,9 +360,11 @@ void ImageMatrix::allocate (unsigned int w, unsigned int h) {
 		// These throw exceptions, which we don't catch (catch in main?)
 		// FIXME: We could check for shrinkage and simply remap instead of allocating.
 		if (verbosity > 7 && _pix_plane.data()) fprintf (stdout, "deallocating grayscale %p\n",(void *)_pix_plane.data());
+		//std::cout <<  "ImageMatrix::allocate(): deallocating grayscale pix_plane pointer=" << (void *)_pix_plane.data() << std::endl;
 		if (_pix_plane.data()) Eigen::aligned_allocator<double>().deallocate (_pix_plane.data(), _pix_plane.size());
 		remap_pix_plane (Eigen::aligned_allocator<double>().allocate (w * h), w, h);
 		if (verbosity > 7 && _pix_plane.data()) fprintf (stdout, "allocated grayscale %p (%d,%d)\n",(void *)_pix_plane.data(), w, h);
+		//std::cout << "ImageMatrix::allocate(): allocated grayscale pix_plane pointer=" << (void *)_pix_plane.data() << " w:" << w << " h:" << h << std::endl;
 	} else {
 		// No re-allocation necessary since size didn't change
 		// The width and height are updated to the parmeters here because remap_pix_plane was not called
@@ -404,24 +416,59 @@ void ImageMatrix::copy(const ImageMatrix &copy) {
 	// Do this stuff last - potentially virtual method calls.
 	copyData (copy);
 }
+/* copies pixel vals FROM input arg "matrix" specified by ROI params into this */
+int ImageMatrix::submatrix( const ImageMatrix &matrix_IN, const unsigned int x1, const unsigned int y1, const unsigned int x2, const unsigned int y2) {
+	// args x1 and y1 can never be negative because they're unsigned ints
 
-void ImageMatrix::submatrix (const ImageMatrix &matrix, const unsigned int x1, const unsigned int y1, const unsigned int x2, const unsigned int y2) {
-	unsigned int x0, y0;
+	#if DEBUG
+		std::cout << "DEBUG submatrix(): crop ROI topleft=(" << x1 << "," << y1 << ") botright=("
+			<< x2 << "," << y2 << ") from ImageMatrix: " << &matrix_IN << " (shape: rows=" <<
+			matrix_IN.height << " cols=" << matrix_IN.width << 	") to:" << this << " (current " <<
+			"shape: rows= " << height << " cols=" << width << ")\n";
+	#endif
 
-	// verify that the image size is OK
-	x0 = (x1 < 0 ? 0 : x1);
-	y0 = (y1 < 0 ? 0 : y1);
-	unsigned int new_width  = (x2 >= matrix.width  ? matrix.width  : x2 - x0 + 1);
-	unsigned int new_height = (y2 >= matrix.height ? matrix.height : y2 - y0 + 1);
+	if( (x2 >= matrix_IN.width) || (y2 >= matrix_IN.height) ) {
+		// invalid!
+		return 0;
+	}
 
-	copyFields (matrix);
-	allocate (new_width, new_height);
+	/*
+	// copy into new buffer so I don't overwrite my own pixels
+	ImageMatrix origin_buffer;
+	
+	if( this == &matrix_IN ){
+		origin_buffer = ImageMatrix();
+		origin_buffer.copy( matrix_IN );
+	} else {
+		origin_buffer = matrix_IN;
+	}
+	*/
+
+	unsigned int new_width  = x2 - x1 + 1;
+	unsigned int new_height = y2 - y1 + 1;
+
+	copyFields( matrix_IN );
+	allocate( new_width, new_height );
+
 	// Copy the Eigen matrixes
 	// N.B. Eigen matrix parameter order is rows, cols, not X, Y
-	WriteablePixels() = matrix.ReadablePixels().block(y0,x0,height,width);
+
+	#if DEBUG
+		auto readable_pixels = matrix_IN.ReadablePixels();
+		std::cout << "DEBUG submatrix(): ReadablePixels() returned matrix shape=(" <<
+			readable_pixels.rows() << ',' << readable_pixels.cols() << ")\n";
+		auto retval = readable_pixels.block(y1,x1,height,width);
+		std::cout << "DEBUG submatrix(): block called" << std::endl;
+		WriteablePixels() = retval;
+		std::cout << "DEBUG submatrix(): wrote the grayscale pixels." << std::endl;
+	#else
+		WriteablePixels() = matrix_IN.ReadablePixels().block(y1,x1,height,width);
+	#endif
+
 	if (ColorMode != cmGRAY) {
-		WriteableColors() = matrix.ReadableColors().block(y0,x0,height,width);
+		WriteableColors() = matrix_IN.ReadableColors().block(y1,x1,height,width);
 	}
+	return 1;
 }
 
 /*
@@ -529,7 +576,6 @@ void ImageMatrix::Downsample (const ImageMatrix &matrix_IN, double x_ratio, doub
 	double x,y,dx,dy,frac;
 	unsigned int new_x,new_y,a;
 	HSVcolor hsv;
-
 
 	if (x_ratio>1) x_ratio=1;
 	if (y_ratio>1) y_ratio=1;
@@ -765,7 +811,7 @@ void ImageMatrix::UpdateStats() {
 	// Its not necessary to use sum() if using unaryExpr as part of an Eigen expression that gets assigned to something
 	// e.g. invert and compute stats in one pass:
 	// WriteablePixels() = (max_val - ReadablePixels().array() + min_val).unaryExpr (Moments2func(stats));
-	ReadablePixels().unaryExpr (Moments2func(stats)).sum();
+	ReadablePixels().unaryExpr( Moments2func(stats) ).sum();
 }
 
 // This calculates sats and puts them in an externally supplied stats object, keeping the ImageMatrix const
@@ -842,15 +888,25 @@ void ImageMatrix::convolve(const pixDataMat &filter) {
 	temp.finish();
 	readOnlyPixels copy_pix_plane = temp.ReadablePixels();
 	writeablePixels pix_plane = WriteablePixels();
-	for (x = 0; x < width; ++x) {
-		for (y = 0; y < height; ++y) {
+	for( x = 0; x < width; ++x )
+	{
+		for( y = 0; y < height; ++y )
+		{
 			tmp=0.0;
-			for (i = -width2; i <= width2; ++i) {
-				xx=x+i;
-				if (xx < width && xx >= 0) {
-					for(j = -height2; j <= height2; ++j) {
-						yy=y+j;
-						if (yy >= 0 && yy < height) {
+			for( i = -width2; i <= width2; ++i )
+			{
+				xx = x + i;
+				// xx is unsigned so xx >= 0 always evaluates to True
+				//if( xx < width && xx >= 0 )
+				if( xx < width )
+				{
+					for( j = -height2; j <= height2; ++j )
+					{
+						yy = y + j;
+						// yy is unsigned so yy >= 0 always evaluates to True
+						// if( yy >= 0 && yy < height) {
+						if( yy < height )
+						{
 							tmp += filter (j+height2, i+width2) * copy_pix_plane(yy,xx);
 						}
 					}
